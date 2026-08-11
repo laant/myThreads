@@ -1,0 +1,16 @@
+# 비밀·개인 데이터 (절대 커밋 금지)
+.env
+data/*
+!data/.gitkeep
+
+# 파이썬
+__pycache__/
+*.pyc
+*.pyo
+
+# 작업 부산물
+_archive_mythreads.tar.gz
+data-test/
+data-test2/
+data-test3/
+.DS_Store

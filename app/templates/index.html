@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>myThreads — 저장한 글 자동 분류</title>
+<link rel="stylesheet" href="/static/styles.css?v=__V__">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧵</text></svg>">
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <div class="brand">🧵 <b>myThreads</b></div>
+    <div class="stat" id="stat"></div>
+
+    <nav id="cats" class="cats"></nav>
+
+    <div class="side-block">
+      <div class="side-title">태그</div>
+      <div id="tags" class="tags"></div>
+    </div>
+
+    <div class="side-foot">
+      <button id="btn-sync" class="btn primary">지금 동기화</button>
+      <button id="btn-syncfull" class="btn ghost">전체 다시 훑기</button>
+      <button id="btn-reclassify" class="btn ghost">분류 체계 재구성</button>
+      <div id="joblog" class="joblog"></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="toolbar">
+      <input id="q" type="search" placeholder="본문·요약·태그·작성자 검색…" autocomplete="off">
+      <div class="spacer"></div>
+      <select id="sort" title="정렬">
+        <option value="newest">최신순 (작성일)</option>
+        <option value="saved">최근 저장순</option>
+        <option value="oldest">오래된순</option>
+        <option value="author">작성자순</option>
+      </select>
+      <div class="viewtoggle" id="viewtoggle">
+        <button data-view="card"  title="카드 — 읽기 위주">카드</button>
+        <button data-view="table" title="표 — 목록·비교">표</button>
+        <button data-view="board" title="보드 — 이미지 위주">보드</button>
+      </div>
+      <button id="btn-theme" class="btn icon" title="테마">◐</button>
+    </header>
+
+    <div id="progress" class="progress hidden">
+      <span class="spin">◐</span>
+      <span id="progress-text">동기화 준비 중…</span>
+      <div class="bar"><i id="progress-bar"></i></div>
+      <button id="progress-cancel" class="linkbtn">중단</button>
+    </div>
+
+    <div class="cat-head" id="cathead"></div>
+    <div id="content" class="content"></div>
+  </main>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-bg"></div>
+  <div class="modal-box" id="modalbox"></div>
+</div>
+
+<script>window.APP_VERSION = "__V__";</script>
+<script src="/static/app.js?v=__V__"></script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+services:
+  web:
+    build: .
+    image: mythreads:latest
+    container_name: mythreads-web
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    volumes:
+      - ./data:/data
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+
+  worker:
+    build: .
+    image: mythreads:latest
+    container_name: mythreads-worker
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+    shm_size: "1gb"
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      - web
+
+  # 최초 1회(또는 세션 만료 시) 로그인 전용.
+  #   docker compose --profile login up login
+  #   → 브라우저에서 http://localhost:6080/vnc.html?autoconnect=1&resize=scale 접속 후 로그인
+  login:
+    build: .
+    image: mythreads:latest
+    container_name: mythreads-login
+    profiles: ["login"]
+    env_file: .env
+    ports:
+      - "${VNC_PORT:-6080}:6080"
+    volumes:
+      - ./data:/data
+    shm_size: "1gb"
+    command: ["./scripts/login.sh"]
