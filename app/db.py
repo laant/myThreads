@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 from typing import Any, Iterable
 
-from .config import DB_PATH
+from .config import DB_PATH, MEDIA_DIR
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE TABLE IF NOT EXISTS skipped (
     id         TEXT PRIMARY KEY,
     reason     TEXT,               -- comment(남의 글에 단 댓글) | failed(수집 실패)
+                                   -- | deleted(사용자가 로컬에서 지움)
     tries      INTEGER DEFAULT 1,
     author     TEXT,
     posted_at  INTEGER,
@@ -248,17 +249,94 @@ def mark_skipped(post_id: str, reason: str, author: str | None = None,
 
 
 def skipped_index(max_failed_tries: int = 3) -> tuple[set[str], set[str]]:
-    """다시 건드리지 않을 글 목록. 댓글은 영구 제외, 실패는 몇 번까지만 재시도."""
+    """다시 건드리지 않을 글 목록.
+
+    댓글과 '사용자가 지운 글'은 영구 제외, 수집 실패는 몇 번까지만 재시도.
+    """
     ids: set[str] = set()
     keys: set[str] = set()
     with db() as conn:
         rows = conn.execute("SELECT id, reason, tries, author, posted_at FROM skipped")
         for r in rows:
-            if r["reason"] == "comment" or int(r["tries"] or 0) >= max_failed_tries:
+            if r["reason"] in ("comment", "deleted") or int(r["tries"] or 0) >= max_failed_tries:
                 ids.add(r["id"])
                 if r["author"] and r["posted_at"]:
                     keys.add(f"{r['author'].strip().lower()}|{int(r['posted_at'])}")
     return ids, keys
+
+
+# ── 로컬에서 지우기 ─────────────────────────────────────────────────────
+# 여기서 지우는 것은 '내 컴퓨터에 받아둔 사본'뿐이다.
+# 이 프로그램은 Threads에 아무것도 쓰지 않으므로 계정의 '저장됨' 목록은 그대로다.
+
+def _remove_media_files(paths: Iterable[str | None]) -> int:
+    """지운 글에만 딸린 이미지 파일을 정리한다.
+
+    - 다른 글이 같은 파일을 함께 쓰고 있으면 남긴다
+    - MEDIA_DIR 밖을 가리키는 경로는 무시한다 (DB 값이 이상해도 엉뚱한 파일을 지우지 않도록)
+    """
+    base = MEDIA_DIR.resolve()
+    removed = 0
+    with db() as conn:
+        for p in paths:
+            if not p:
+                continue
+            still_used = conn.execute(
+                "SELECT 1 FROM media WHERE local_path=? LIMIT 1", (p,)).fetchone()
+            if still_used:
+                continue
+            target = (MEDIA_DIR / str(p).split("/")[-1]).resolve()
+            if target.parent != base or not target.is_file():
+                continue
+            try:
+                target.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
+
+
+def delete_post(post_id: str, forget: bool = True) -> dict:
+    """저장해 둔 글 1건을 로컬에서 지운다 (본문·이어쓴 글·분류·이미지 파일).
+
+    forget=True 면 '내가 지운 글'로 기억해 다음 수집 때 다시 가져오지 않는다.
+    (기억을 지우려면 restore_deleted() — 그 뒤 전체 훑기를 하면 다시 들어온다)
+    """
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id, author, posted_at FROM posts WHERE id=?", (post_id,)).fetchone()
+        if not row:
+            return {"ok": False, "reason": "not_found"}
+        author, posted_at = row["author"], row["posted_at"]
+        paths = [r["local_path"] for r in conn.execute(
+            "SELECT local_path FROM media WHERE post_id=?", (post_id,))]
+        for table, col in (("classification", "post_id"), ("segments", "post_id"),
+                           ("media", "post_id"), ("posts", "id")):
+            conn.execute(f"DELETE FROM {table} WHERE {col}=?", (post_id,))
+
+    removed = _remove_media_files(paths)
+    if forget:
+        mark_skipped(post_id, "deleted", author, posted_at)
+    return {"ok": True, "id": post_id, "media_removed": removed, "forgotten": bool(forget)}
+
+
+def deleted_posts() -> list[dict]:
+    """내가 지운 글 목록 (다시 가져오지 않도록 기억해 둔 것)."""
+    with db() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT id, author, posted_at, updated_at FROM skipped "
+            "WHERE reason='deleted' ORDER BY updated_at DESC")]
+
+
+def restore_deleted(post_id: str | None = None) -> int:
+    """'지운 글' 기억을 없앤다 — 다음 전체 훑기에서 다시 수집된다."""
+    with db() as conn:
+        if post_id:
+            cur = conn.execute(
+                "DELETE FROM skipped WHERE id=? AND reason='deleted'", (post_id,))
+        else:
+            cur = conn.execute("DELETE FROM skipped WHERE reason='deleted'")
+        return cur.rowcount
 
 
 def start_job(kind: str) -> int:

@@ -9,9 +9,9 @@ from . import config
 from .classifier import classify, taxonomy
 from .collector import media as media_dl
 from .collector import scraper
-from .db import (db, finish_job, get_setting, init_db, is_cancel_requested, mark_skipped, now,
-                 replace_media, replace_segments, set_setting, skipped_index, start_job,
-                 touch_job, upsert_post)
+from .db import (db, delete_post, deleted_posts, finish_job, get_setting, init_db,
+                 is_cancel_requested, mark_skipped, now, replace_media, replace_segments,
+                 restore_deleted, set_setting, skipped_index, start_job, touch_job, upsert_post)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -228,6 +228,44 @@ def prune_comments(dry_run: bool = True) -> dict:
     return {"found": len(rows), "deleted": len(ids)}
 
 
+def delete_posts(ids: list[str]) -> dict:
+    """글을 로컬에서 지운다 (웹 화면의 '로컬에서 삭제'와 같은 동작)."""
+    init_db()
+    done, missing = 0, []
+    for pid in ids:
+        res = delete_post(pid, forget=True)
+        if res.get("ok"):
+            done += 1
+            print(f"삭제 {pid} (이미지 {res['media_removed']}개 정리)")
+        else:
+            missing.append(pid)
+    if missing:
+        print(f"찾지 못한 글: {', '.join(missing)}")
+    print(f"{done}건을 로컬에서 지웠습니다. Threads의 '저장됨' 목록은 그대로입니다.")
+    return {"deleted": done, "not_found": len(missing)}
+
+
+def show_deleted(restore: str | None = None) -> None:
+    """내가 지운 글 목록을 보여주거나, 기억을 지워 다시 받을 수 있게 한다."""
+    import datetime as _dt
+    init_db()
+    if restore:
+        n = restore_deleted(None if restore == "all" else restore)
+        print(f"{n}건의 '지운 글' 기억을 없앴습니다. "
+              f"make sync-full 로 전체를 다시 훑으면 되돌아옵니다.")
+        return
+    rows = deleted_posts()
+    if not rows:
+        print("로컬에서 지운 글이 없습니다.")
+        return
+    print(f"로컬에서 지운 글 {len(rows)}건 (다시 수집하지 않도록 기억 중):")
+    for r in rows:
+        when = _dt.datetime.fromtimestamp(r["updated_at"] or 0)
+        print(f"  {r['id']:24} @{r['author'] or '?':<20} {when:%Y-%m-%d %H:%M}")
+    print("\n되돌리려면: python -m app.pipeline deleted --restore <id|all> "
+          "후 make sync-full")
+
+
 def doctor() -> None:
     """지금 돌고 있는 컨테이너에 무엇이 적용돼 있고, 지난 실행이 어땠는지 그대로 보여준다."""
     import datetime as _dt
@@ -340,6 +378,18 @@ def main(argv: list[str]) -> int:
         reset_db()
     elif cmd == "prune-comments":
         prune_comments(dry_run="--apply" not in argv)
+    elif cmd == "delete":
+        ids = [a for a in argv[2:] if not a.startswith("-")]
+        if not ids:
+            print("사용법: python -m app.pipeline delete <글id> [글id…]")
+            return 2
+        delete_posts(ids)
+    elif cmd == "deleted":
+        restore = None
+        if "--restore" in argv:
+            i = argv.index("--restore")
+            restore = argv[i + 1] if len(argv) > i + 1 else "all"
+        show_deleted(restore)
     elif cmd == "doctor":
         doctor()
     elif cmd == "status":
@@ -360,7 +410,7 @@ def main(argv: list[str]) -> int:
         print(f"'실행 중'으로 멈춰 있던 작업 {n}건을 정리했습니다.")
     else:
         print("사용법: python -m app.pipeline "
-              "[sync|collect|probe|classify|reclassify|taxonomy|reset-db]")
+              "[sync|collect|probe|classify|reclassify|taxonomy|delete|deleted|reset-db]")
         return 2
     return 0
 

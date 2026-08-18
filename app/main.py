@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from starlette.requests import Request
 
 from . import config
-from .db import clear_stale_jobs, db, init_db, now
+from .db import clear_stale_jobs, db, delete_post, init_db, now, restore_deleted
 
 BASE = Path(__file__).parent
 app = FastAPI(title="myThreads", docs_url=None, redoc_url=None)
@@ -212,6 +212,25 @@ def set_category(post_id: str, body: CategoryPatch):
             (post_id, body.category_id, int(body.lock), now()),
         )
     return {"ok": True}
+
+
+@app.delete("/api/posts/{post_id}")
+def api_delete_post(post_id: str, forget: bool = True):
+    """저장해 둔 글을 로컬에서만 지운다.
+
+    내려받은 이미지 파일까지 함께 지우며, Threads 계정의 '저장됨' 목록은 그대로다.
+    forget=false 로 부르면 다음 수집 때 다시 들어온다.
+    """
+    res = delete_post(post_id, forget=forget)
+    if not res.get("ok"):
+        raise HTTPException(404, "글을 찾을 수 없습니다.")
+    return res
+
+
+@app.post("/api/posts/{post_id}/restore")
+def api_restore_post(post_id: str):
+    """'지운 글' 기억만 지운다 — 이후 전체 훑기에서 다시 수집된다."""
+    return {"ok": True, "restored": restore_deleted(post_id)}
 
 
 class ViewPatch(BaseModel):

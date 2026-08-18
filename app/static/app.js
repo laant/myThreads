@@ -175,10 +175,16 @@ function openPost(id) {
       ${body}
       ${imgs}
       <div class="cardtags">${(p.tags || []).map((t) => `<span>${esc(t)}</span>`).join('')}</div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint">내 컴퓨터에 받아둔 사본만 지웁니다 —
+        Threads 계정의 '저장됨' 목록은 그대로입니다.</span>
+      <button class="btn danger" id="m-del">로컬에서 삭제</button>
     </div>`;
   $('#modal').classList.remove('hidden');
   $('#m-x').onclick = closeModal;
   $('.modal-bg').onclick = closeModal;
+  $('#m-del').onclick = () => deletePost(p);
   $('#m-cat').onchange = async (e) => {
     await api(`/api/posts/${p.id}/category`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -189,6 +195,34 @@ function openPost(id) {
 }
 const closeModal = () => $('#modal').classList.add('hidden');
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+/* 로컬에 받아둔 사본만 삭제 — Threads 계정의 '저장됨' 목록은 건드리지 않는다 */
+async function deletePost(p) {
+  const peek = (p.summary || p.body || p.full_text || '').replace(/\s+/g, ' ').slice(0, 60);
+  if (!confirm(`이 글을 로컬에서 지웁니다.\n\n@${p.author || ''}\n${peek}\n\n`
+    + '· 본문·이어쓴 글·분류·내려받은 이미지가 삭제됩니다\n'
+    + "· Threads 계정의 '저장됨' 목록은 그대로입니다\n"
+    + '· 다음 동기화에서 다시 가져오지 않습니다\n\n삭제할까요?')) return;
+
+  const btn = $('#m-del');
+  if (btn) { btn.disabled = true; btn.textContent = '삭제 중…'; }
+  let r = null;
+  try {
+    r = await api(`/api/posts/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+  } catch (e) { /* 아래에서 실패로 처리 */ }
+
+  if (!r || !r.ok) {
+    toast('삭제하지 못했습니다. ' + ((r && (r.detail || r.error)) || ''));
+    if (btn) { btn.disabled = false; btn.textContent = '로컬에서 삭제'; }
+    return;
+  }
+  closeModal();
+  S.posts = S.posts.filter((x) => x.id !== p.id);   // 목록에서 즉시 치운다
+  renderHead(); renderView();
+  toast(`삭제했습니다 — 이미지 ${r.media_removed}개 정리. `
+    + "다시 받으려면 '전체 다시 훑기' 전에 복원이 필요합니다.");
+  boot();                                            // 개수·카테고리 갱신
+}
 
 /* ── 툴바 동작 ──────────────────────────── */
 $('#viewtoggle').querySelectorAll('button').forEach((b) => b.onclick = async () => {

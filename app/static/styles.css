@@ -138,6 +138,10 @@ td.t-img img{width:44px;height:44px;object-fit:cover;border-radius:6px}
 .modal-body img.full{width:100%;border-radius:10px;border:1px solid var(--line)}
 select{padding:6px 9px;border-radius:8px;border:1px solid var(--line);background:var(--panel)}
 .x{margin-left:auto;border:none;background:none;font-size:20px;cursor:pointer;color:var(--dim)}
+.modal-foot{display:flex;gap:14px;align-items:center;padding:14px 20px;border-top:1px solid var(--line)}
+.modal-foot .hint{font-size:12px;color:var(--dim);line-height:1.5}
+.btn.danger{margin-left:auto;color:#ef4444;white-space:nowrap}
+.btn.danger:hover{background:#ef4444;border-color:#ef4444;color:#fff}
 
 @media (max-width:900px){
   #app{grid-template-columns:1fr}
