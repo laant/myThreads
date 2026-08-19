@@ -63,13 +63,32 @@ def walk_threads(node: Any, out: list[list[dict]] | None = None) -> list[list[di
     return out
 
 
+def _fragment_text(node: dict) -> str:
+    """caption 이 비어 있는 글의 본문. 주로 긴 글이 이 형태로 온다.
+
+    Threads는 어느 정도 길이를 넘는 글의 본문을 caption 이 아니라
+    text_post_app_info.snippet_attachment_info.text_fragments 에 조각으로 넣어 보낸다.
+    여기를 안 읽으면 그런 글은 '본문 없는 빈 글'로 저장된다.
+    """
+    tpai = node.get("text_post_app_info")
+    if not isinstance(tpai, dict):
+        return ""
+    snippet = tpai.get("snippet_attachment_info") or {}
+    if not isinstance(snippet, dict):
+        return ""
+    fragments = (snippet.get("text_fragments") or {}).get("fragments") or []
+    parts = [(f.get("plaintext") or "").strip()
+             for f in fragments if isinstance(f, dict)]
+    return "\n".join(p for p in parts if p).strip()
+
+
 def _caption_text(node: dict) -> str:
     cap = node.get("caption")
-    if isinstance(cap, dict):
-        return (cap.get("text") or "").strip()
-    if isinstance(cap, str):
+    if isinstance(cap, dict) and (cap.get("text") or "").strip():
+        return cap["text"].strip()
+    if isinstance(cap, str) and cap.strip():
         return cap.strip()
-    return ""
+    return _fragment_text(node)
 
 
 def _best_image(candidates: Iterable[dict]) -> str | None:

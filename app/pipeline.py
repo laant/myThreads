@@ -38,9 +38,38 @@ def known_post_keys() -> set[str]:
     return keys | skipped_index()[1]
 
 
+def kept_media(pid: str, incoming: list[dict]) -> list[dict] | None:
+    """이미 받아둔 사본을 그대로 쓸 수 있으면 돌려준다 (없으면 None).
+
+    fbcdn 주소는 열 때마다 서명이 달라져 URL로는 같은 그림인지 알 수 없다.
+    그래서 '개수가 같고 로컬 사본이 모두 남아 있으면 같은 것'으로 본다.
+    이게 없으면 재수집할 때마다 전부 다시 받아 사본이 쌓이고,
+    만료된 주소는 내려받기에 실패해 멀쩡히 있던 이미지 연결이 끊긴다.
+    """
+    if not incoming:
+        return None
+    with db() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT kind, url, local_path, alt FROM media WHERE post_id=? ORDER BY ord", (pid,))]
+    if not rows or len(rows) != len(incoming):
+        return None
+    for r in rows:
+        if not r["local_path"] or not (config.DATA_DIR / r["local_path"]).exists():
+            return None
+    return rows
+
+
 async def save_post(item: dict) -> bool:
     """글 1건을 이미지까지 내려받아 저장. 신규면 True."""
     pid = item["id"]
+    keep = kept_media(pid, item.get("media") or [])
+    if keep is not None:
+        item["media"] = keep
+        with db() as conn:
+            is_new = upsert_post(conn, item)
+            replace_segments(conn, pid, item.get("segments") or [])
+            replace_media(conn, pid, keep)
+        return is_new
     try:
         # 이미지 서버가 안 죽고 안 끊기는 경우 대비 — 글 하나에 매달리지 않는다
         item["media"] = await asyncio.wait_for(
@@ -228,6 +257,61 @@ def prune_comments(dry_run: bool = True) -> dict:
     return {"found": len(rows), "deleted": len(ids)}
 
 
+# DOM 폴백으로 들어온 글을 찾아내는 조건.
+#   - 본문이 아예 없음            → 수집 실패로 빈 껍데기만 남은 글
+#   - 작성시각이 0                → 상대시각("23시간")만 보고 저장돼 시각을 못 얻은 글
+#   - 본문 앞머리에 작성자명       → "@아이디 23시간 본문…" 형태로 UI 텍스트가 섞인 글
+POLLUTED_SQL = """
+  SELECT id, author, saved_rank, posted_at, coalesce(full_text,'') AS t,
+         CASE WHEN coalesce(full_text,'')='' THEN '빈 껍데기'
+              WHEN author<>'' AND instr(substr(full_text,1,40), author)>0 THEN '본문에 UI 텍스트'
+              ELSE '작성시각 없음' END AS 증상
+  FROM posts
+  WHERE coalesce(full_text,'')=''
+     OR coalesce(posted_at,0)=0
+     OR (author<>'' AND instr(substr(full_text,1,40), author)>0)
+  ORDER BY saved_rank
+"""
+
+
+def repair(dry_run: bool = True) -> dict:
+    """DOM 폴백으로 잘못 들어온 글을 찾아, 다음 전체 훑기에서 다시 받도록 표시한다.
+
+    글을 지우지 않는다 — '다시 받아야 함' 표시만 하고, 실제 교체는 수집이 한다.
+    수동으로 분류를 확정한 글의 분류는 건드리지 않는다.
+    """
+    init_db()
+    with db() as conn:
+        rows = [dict(r) for r in conn.execute(POLLUTED_SQL)]
+    by_symptom: dict[str, int] = {}
+    for r in rows:
+        by_symptom[r["증상"]] = by_symptom.get(r["증상"], 0) + 1
+    print(f"다시 받아야 할 글: {len(rows)}건")
+    for k, v in sorted(by_symptom.items(), key=lambda x: -x[1]):
+        print(f"   {k:16} {v}건")
+    for r in rows[:5]:
+        print(f"   예) {r['id']:14} @{r['author']:<18} {r['t'][:40].replace(chr(10), ' ')}")
+
+    if dry_run:
+        print("\n실제로 표시하려면: make repair-apply  (그 뒤 make sync-full)")
+        return {"found": len(rows), "marked": 0}
+
+    ids = [r["id"] for r in rows]
+    with db() as conn:
+        for pid in ids:
+            # detail_ok=0 이면 '아직 제대로 못 받은 글'로 취급돼 수집 대상에 다시 들어간다
+            conn.execute("UPDATE posts SET detail_ok=0 WHERE id=?", (pid,))
+            # 예전 실패 기록 때문에 건너뛰지 않도록 정리 (댓글·삭제 기록은 그대로 둔다)
+            conn.execute("DELETE FROM skipped WHERE id=? AND reason='failed'", (pid,))
+            # 오염된 본문으로 만든 요약·태그는 버린다 (수동 확정분은 유지)
+            conn.execute(
+                "DELETE FROM classification WHERE post_id=? AND coalesce(locked,0)=0", (pid,))
+    set_setting(NEEDS_FULL_KEY, True)      # 다음 동기화는 목록을 끝까지 훑는다
+    print(f"\n{len(ids)}건을 '다시 받기' 대상으로 표시했습니다.")
+    print("이제 make sync-full 을 실행하면 본문·작성시각·이어쓴 글을 다시 받아 채웁니다.")
+    return {"found": len(rows), "marked": len(ids)}
+
+
 def delete_posts(ids: list[str]) -> dict:
     """글을 로컬에서 지운다 (웹 화면의 '로컬에서 삭제'와 같은 동작)."""
     init_db()
@@ -378,6 +462,8 @@ def main(argv: list[str]) -> int:
         reset_db()
     elif cmd == "prune-comments":
         prune_comments(dry_run="--apply" not in argv)
+    elif cmd == "repair":
+        repair(dry_run="--apply" not in argv)
     elif cmd == "delete":
         ids = [a for a in argv[2:] if not a.startswith("-")]
         if not ids:

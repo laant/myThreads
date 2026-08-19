@@ -1,5 +1,6 @@
 .PHONY: help build up down logs login sync sync-full probe classify reclassify shell \
-        unstick reset status doctor prune-comments prune-comments-apply delete deleted
+        unstick reset status doctor prune-comments prune-comments-apply delete deleted \
+        repair repair-apply
 
 help:
 	@echo "make build     - 이미지 빌드"
@@ -16,6 +17,7 @@ help:
 	@echo "make reclassify- 카테고리 체계 재구성 후 전체 재분류"
 	@echo "make prune-comments       - 이미 저장된 것 중 '댓글'을 찾아서 보여주기 (삭제 안 함)"
 	@echo "make prune-comments-apply - 위에서 확인한 댓글을 실제로 삭제"
+	@echo "make repair    - 본문이 잘못 들어온 글 찾기 (확인만) → repair-apply 후 sync-full"
 	@echo "make deleted   - 로컬에서 지운 글 목록 (복원: deleted --restore <id|all> 후 sync-full)"
 	@echo "make delete ID=<글id>     - 글을 로컬에서만 삭제 (Threads 저장 목록은 유지)"
 	@echo "make unstick   - '실행 중'에서 멈춘 작업 정리 (새 작업이 안 걸릴 때)"
@@ -65,6 +67,12 @@ doctor:
 
 status:
 	docker compose exec worker python -m app.pipeline status
+
+repair:
+	docker compose exec worker python -m app.pipeline repair
+
+repair-apply:
+	docker compose exec worker python -m app.pipeline repair --apply
 
 deleted:
 	docker compose exec worker python -m app.pipeline deleted

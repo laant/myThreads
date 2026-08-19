@@ -78,6 +78,40 @@ def test_dedupe_prefers_richer():
     assert len(out) == 1 and out[0]["body"] == "긴 본문"
 
 
+
+def test_long_post_text_fragments():
+    """긴 글은 caption 이 null 이고 본문이 조각으로 온다 — 그것도 읽어야 한다."""
+    node = {
+        "code": "LONG01", "pk": "9", "taken_at": 1760960536,
+        "user": {"username": "chase90re"},
+        "caption": None,
+        "text_post_app_info": {
+            "direct_reply_count": 0,
+            "snippet_attachment_info": {
+                "link_preview_attachment": None,
+                "text_fragments": {"fragments": [
+                    {"plaintext": "스타일 앵커: Sora2 실사 시네마틱"},
+                    {"plaintext": "캐릭터: 남은혜"},
+                    {"plaintext": ""},
+                ]},
+            },
+        },
+    }
+    out = parser.normalize(node)
+    assert out["body"] == "스타일 앵커: Sora2 실사 시네마틱\n캐릭터: 남은혜", repr(out["body"])
+    assert parser.looks_like_post(node)
+
+    # caption 이 있으면 그쪽이 우선
+    node["caption"] = {"text": "짧은 본문"}
+    assert parser.normalize(node)["body"] == "짧은 본문"
+
+    # 조각이 아예 없어도 터지지 않는다
+    for broken in (None, {}, {"text_fragments": None}, {"text_fragments": {"fragments": None}}):
+        node["caption"] = None
+        node["text_post_app_info"]["snippet_attachment_info"] = broken
+        assert parser.normalize(node)["body"] == ""
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

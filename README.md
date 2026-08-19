@@ -99,6 +99,8 @@ make classify                # 미분류 글만 분류
 make reclassify              # 카테고리 체계 재설계 + 전체 재분류
 make login                   # 로그인 세션 재발급 (만료 시)
 make reset                   # DB 초기화 (미디어·세션 유지)
+make repair                  # 본문이 잘못 들어온 글 찾기 (확인만)
+make repair-apply            # 위 글들을 '다시 받기' 대상으로 표시 → make sync-full
 make deleted                 # 로컬에서 지운 글 목록 확인
 docker compose exec worker python -m app.pipeline taxonomy   # 현재 카테고리 확인
 docker compose exec worker python -m app.pipeline delete <글id> [글id…]   # 로컬에서 삭제
@@ -130,15 +132,23 @@ app/
 data/           SQLite DB · 로그인 세션 · 내려받은 이미지  ← 백업은 이 폴더만
 ```
 
-수집은 DOM 파싱이 아니라 **Threads 웹이 주고받는 내부 JSON을 가로채는 방식**이 1순위라
-화면 개편에 비교적 강합니다. 그래도 깨지면 `app/collector/parser.py`의
-`looks_like_post()` 조건만 손보면 됩니다.
+수집은 DOM 파싱이 아니라 **Threads 웹이 주고받는 내부 JSON을 읽는 방식**이 1순위라
+화면 개편에 비교적 강합니다. JSON은 두 곳에서 들어옵니다:
+
+1. **최초 HTML 문서에 심긴** `<script type="application/json">` — 첫 화면(목록 상단·글 상세)
+2. 스크롤하며 오는 **네트워크 응답(XHR)** — 목록의 그 아래쪽
+
+1번을 빼먹으면 목록 맨 위 글들과 글 상세를 통째로 놓쳐 DOM 텍스트로 때우게 되고,
+그러면 본문에 `작성자명 23시간 …` 같은 UI 문구가 섞이고 작성시각을 잃습니다.
+그렇게 오염된 글은 `make repair` 로 찾아 다시 받을 수 있습니다.
+파싱이 깨지면 `app/collector/parser.py`의 `looks_like_post()` 조건만 손보면 됩니다.
 
 ## 테스트
 
 ```bash
 python tests/test_parser.py      # 파서 단위 테스트 (네트워크 불필요)
 python tests/test_delete.py      # 로컬 삭제 · 복원 (네트워크 불필요)
+python tests/test_html_json.py   # HTML에 심긴 JSON 수집 (네트워크 불필요)
 # 나머지 tests/*.py 는 가짜 Threads 서버를 띄워 실제 브라우저로 검증합니다
 DATA_DIR=./data python tests/seed_demo.py   # UI 확인용 데모 데이터
 ```
@@ -159,6 +169,8 @@ DATA_DIR=./data python tests/seed_demo.py   # UI 확인용 데모 데이터
 | 저장 글이 수백 건 | 1회 실행 상한(`RUN_BUDGET_MIN`, 기본 120분)에 걸리면 거기까지 저장하고 정상 종료합니다. 다음 실행에서 계속됩니다 |
 | `로그인 세션 없음` | `make login` 다시 실행 |
 | 수집 0건 | Threads UI 변경 가능성 — `make logs`에서 "저장됨 목록: JSON n개 / DOM 링크 m개" 확인 |
+| 본문에 `작성자명 23시간 …` 이 섞임 | HTML에 심긴 JSON을 못 읽어 DOM 텍스트로 때운 글입니다. `make repair` → `make repair-apply` → `make sync-full` |
+| 최신 글인데 목록 맨 뒤에 있음 | 작성시각을 못 얻어 `posted_at=0` 인 경우입니다. 위와 같은 방법으로 복구 |
 | 분류 실패 | `.env`의 `GEMINI_API_KEY` 확인. 모델명이 없으면 사용 가능한 최신 flash 모델로 자동 대체됩니다 |
 | 분류가 너무 느림/비쌈 | `GEMINI_MODEL` 을 flash-lite 계열로. 반대로 품질을 올리려면 `GEMINI_THINKING=high` |
 | 이미지가 안 보임 | fbcdn 링크는 만료됩니다. `DOWNLOAD_MEDIA=1`(기본)이면 로컬 사본을 씁니다 |

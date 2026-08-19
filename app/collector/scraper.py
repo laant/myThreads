@@ -17,6 +17,8 @@ log = logging.getLogger("collector")
 GRAPHQL_HINTS = ("/graphql", "/api/graphql", "/api/v1/")
 DEFAULT_BASE = "https://www.threads.com"
 POST_HREF_RE = re.compile(r"/@([\w.\-]+)/post/([A-Za-z0-9_\-]+)")
+# 첫 화면 데이터는 XHR이 아니라 HTML 문서 안에 이 형태로 실려 온다
+JSON_SCRIPT_RE = re.compile(r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', re.S)
 
 
 class NotLoggedIn(RuntimeError):
@@ -35,10 +37,13 @@ def is_comment(item: dict) -> bool:
 
 
 class JsonSink:
-    """네트워크 응답에서 글 항목을 실시간으로 뽑아 모으는 수집통.
+    """페이지가 주는 JSON에서 글 항목을 실시간으로 뽑아 모으는 수집통.
 
-    응답이 올 때마다 바로 파싱해 코드별로 누적하므로, 스크롤 도중
-    '지금까지 몇 개 모였는지'를 O(1)로 확인할 수 있다.
+    두 곳에서 들어온다:
+      1. 네트워크 응답(XHR) — 스크롤하며 더 불러오는 부분
+      2. 최초 HTML 문서에 심긴 <script type="application/json"> — **첫 화면 부분**
+    2번을 빼먹으면 저장됨 목록의 맨 위쪽 글들과 글 상세를 통째로 놓쳐,
+    DOM 폴백(작성자명·상대시각이 섞인 텍스트)에 의존하게 된다.
     """
 
     def __init__(self) -> None:
@@ -46,6 +51,7 @@ class JsonSink:
         self.threads: dict[str, list[dict]] = {}   # 루트 코드 → [루트, 이어쓴 글…]
         self.grouped = False                       # thread_items 묶음을 실제로 본 적 있는가
         self.responses = 0
+        self.html_blocks = 0                       # HTML에서 읽어낸 JSON 블록 수
         self._tasks: set[asyncio.Task] = set()
 
     def attach(self, page: Page) -> None:
@@ -77,21 +83,45 @@ class JsonSink:
                 payload = json.loads(chunk)
             except Exception:
                 continue
-            # 1) 스레드 묶음을 그대로 보존 — 여기에 '이어서 쓴 글'이 들어 있다
-            for group in parser.walk_threads(payload):
-                items = [parser.normalize(n) for n in group]
-                for it in items:
-                    self._merge(it)
-                root = items[0]
-                code = root.get("id")
-                if not code:
-                    continue
-                self.grouped = True
-                if len(items) > len(self.threads.get(code, [])):
-                    self.threads[code] = items
-            # 2) 묶음 밖에 있는 글도 놓치지 않는다
-            for node in parser.walk_posts(payload):
-                self._merge(parser.normalize(node))
+            self._ingest(payload)
+
+    def _ingest(self, payload: Any) -> None:
+        """파싱된 JSON 한 덩어리에서 글을 뽑아 담는다 (응답이든 HTML이든 동일)."""
+        # 1) 스레드 묶음을 그대로 보존 — 여기에 '이어서 쓴 글'이 들어 있다
+        for group in parser.walk_threads(payload):
+            items = [parser.normalize(n) for n in group]
+            for it in items:
+                self._merge(it)
+            root = items[0]
+            code = root.get("id")
+            if not code:
+                continue
+            self.grouped = True
+            if len(items) > len(self.threads.get(code, [])):
+                self.threads[code] = items
+        # 2) 묶음 밖에 있는 글도 놓치지 않는다
+        for node in parser.walk_posts(payload):
+            self._merge(parser.normalize(node))
+
+    def ingest_html(self, html: str) -> int:
+        """HTML 문서에 심겨 온 JSON을 읽는다. 반환값은 새로 알게 된 글 수.
+
+        Threads는 첫 화면 데이터를 응답이 아니라 문서 안에 넣어 보낸다.
+        여기를 읽어야 저장됨 목록 상단과 글 상세의 본문·작성시각·이어쓴 글을
+        제대로 얻는다 (읽지 못하면 DOM 텍스트로 때우게 된다).
+        """
+        before = len(self.by_code)
+        for block in JSON_SCRIPT_RE.findall(html or ""):
+            block = block.strip()
+            if not block or not block.startswith("{"):
+                continue
+            try:
+                payload = json.loads(block)
+            except Exception:
+                continue
+            self.html_blocks += 1
+            self._ingest(payload)
+        return len(self.by_code) - before
 
     def _merge(self, item: dict) -> None:
         code = item.get("id") or item.get("pk")
@@ -128,6 +158,19 @@ class JsonSink:
         self.by_code.clear()
         self.threads.clear()
         self.responses = 0
+        self.html_blocks = 0
+
+
+async def _absorb_html(page: Page, sink: JsonSink, what: str) -> int:
+    """지금 열린 문서에 심긴 JSON을 수집통에 넣는다. 실패해도 수집을 멈추지 않는다."""
+    try:
+        found = sink.ingest_html(await page.content())
+    except Exception as exc:
+        log.debug("%s HTML 읽기 실패: %s", what, exc)
+        return 0
+    if found:
+        log.info("%s HTML에서 글 %d건 확보", what, found)
+    return found
 
 
 async def _dismiss_popups(page: Page) -> None:
@@ -391,6 +434,9 @@ async def collect(
             await browser.close()
             raise NotLoggedIn("세션이 만료되었습니다. `make login` 으로 다시 로그인해 주세요.")
 
+        # 첫 화면 글들은 응답이 아니라 이 문서 안에 들어 있다 — 먼저 읽어둔다
+        await _absorb_html(page, sink, "저장됨 목록 첫 화면")
+
         t_scroll = asyncio.get_event_loop().time()
         seen_links, early_stop = await _autoscroll(
             page, config.MAX_SCROLLS, sink, known_ids=known_ids, known_keys=known_keys,
@@ -617,6 +663,8 @@ async def _fetch_detail(page: Page, sink: JsonSink, item: dict) -> dict:
     await page.goto(url, wait_until="domcontentloaded",
                     timeout=config.DETAIL_TIMEOUT_SEC * 1000)
     await page.wait_for_timeout(config.DETAIL_SETTLE_MS)
+    # 상세 페이지도 본문이 문서 안에 실려 온다 (응답만 봐서는 한 건도 못 건진다)
+    await _absorb_html(page, sink, f"상세 {item['id']}")
     # 이어쓴 댓글이 접혀 있을 수 있으니 조금 스크롤
     for _ in range(config.DETAIL_SCROLLS):
         await page.mouse.wheel(0, 2500)
