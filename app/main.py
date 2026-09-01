@@ -58,6 +58,36 @@ def _categories() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _tag_counts(category: str | None = None) -> list[dict]:
+    """지금 보고 있는 화면에 실제로 있는 태그를, 그 화면 기준 개수로 센다.
+
+    전체 개수로 보여주면 카테고리를 보는 중에 '일상 117' 같은 태그를 눌러도
+    한 건도 안 나오는 일이 생긴다 — 목록은 카테고리 안으로 한정돼 있기 때문이다.
+    그래서 카테고리를 고르면 그 안의 태그만, 그 안의 개수로 센다.
+    """
+    if category == "unclassified":
+        return []                      # 분류가 없으니 태그도 없다
+    sql = ["SELECT cl.tags FROM classification cl", "JOIN posts p ON p.id = cl.post_id"]
+    params: list = []
+    if category and category != "all":
+        sql += ["LEFT JOIN categories cat ON cat.id = cl.category_id",
+                "LEFT JOIN categories sec ON sec.id = cl.secondary_id",
+                "WHERE cat.slug = ? OR sec.slug = ?"]
+        params += [category, category]
+
+    counts: dict[str, int] = {}
+    with db() as conn:
+        for r in conn.execute(" ".join(sql), params):
+            try:
+                for t in json.loads(r["tags"] or "[]"):
+                    counts[t] = counts.get(t, 0) + 1
+            except Exception:
+                pass
+    # 동점이면 가나다순 — 같은 횟수인데 어떤 건 보이고 어떤 건 안 보이는 일이 없도록
+    ordered = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+    return [{"name": t, "count": c} for t, c in ordered]
+
+
 SORTS = {
     # 작성일 기준 최신순 — 날짜를 모르는 글은 뒤로
     "newest": "COALESCE(NULLIF(p.posted_at,0), 0) DESC, p.saved_at DESC",
@@ -73,6 +103,9 @@ def _posts(category: str | None = None, q: str | None = None, tag: str | None = 
            limit: int = 500, offset: int = 0, post_id: str | None = None,
            sort: str = "newest") -> list[dict]:
     where, params = ["1=1"], []
+    # 카테고리를 볼 때, 보조분류로만 걸린 글은 '관련 글'로 따로 표시한다.
+    # (주분류가 다른 글이라 섞어 놓으면 남의 카테고리 글이 끼어든 것처럼 보인다)
+    related_expr, sel_params = "0 AS related", []
     if post_id:
         where.append("p.id = ?")
         params.append(post_id)
@@ -82,6 +115,8 @@ def _posts(category: str | None = None, q: str | None = None, tag: str | None = 
         else:
             where.append("(cat.slug = ? OR sec.slug = ?)")
             params += [category, category]
+            related_expr = "CASE WHEN cat.slug = ? THEN 0 ELSE 1 END AS related"
+            sel_params.append(category)
     if q:
         where.append("(p.full_text LIKE ? OR p.author LIKE ? OR cl.summary LIKE ? OR cl.tags LIKE ?)")
         like = f"%{q}%"
@@ -93,16 +128,17 @@ def _posts(category: str | None = None, q: str | None = None, tag: str | None = 
     sql = f"""
       SELECT p.*, cl.summary, cl.tags, cl.confidence, cl.method, cl.locked,
              cat.slug AS cat_slug, cat.name AS cat_name, cat.color AS cat_color,
-             sec.slug AS sec_slug, sec.name AS sec_name
+             sec.slug AS sec_slug, sec.name AS sec_name,
+             {related_expr}
       FROM posts p
       LEFT JOIN classification cl ON cl.post_id = p.id
       LEFT JOIN categories cat ON cat.id = cl.category_id
       LEFT JOIN categories sec ON sec.id = cl.secondary_id
       WHERE {' AND '.join(where)}
-      ORDER BY {SORTS.get(sort, SORTS['newest'])}, p.id DESC
+      ORDER BY related, {SORTS.get(sort, SORTS['newest'])}, p.id DESC
       LIMIT ? OFFSET ?
     """
-    params += [limit, offset]
+    params = sel_params + params + [limit, offset]
     with db() as conn:
         rows = [dict(r) for r in conn.execute(sql, params)]
         ids = [r["id"] for r in rows]
@@ -156,19 +192,11 @@ def bootstrap():
             "WHERE cl.post_id IS NULL"
         ).fetchone()["c"]
         job = conn.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT 1").fetchone()
-        tags: dict[str, int] = {}
-        for r in conn.execute("SELECT tags FROM classification WHERE tags IS NOT NULL"):
-            try:
-                for t in json.loads(r["tags"]):
-                    tags[t] = tags.get(t, 0) + 1
-            except Exception:
-                pass
-    top_tags = sorted(tags.items(), key=lambda x: -x[1])[:40]
     return {
         "categories": _categories(),
         "total": total,
         "unclassified": unclassified,
-        "tags": [{"name": t, "count": c} for t, c in top_tags],
+        "tags": _tag_counts(),
         "job": dict(job) if job else None,
         "sync_times": config.SYNC_TIMES,
         "logged_in": config.STATE_PATH.exists(),
@@ -177,6 +205,12 @@ def bootstrap():
         "llm_ready": bool(config.GEMINI_API_KEY if config.LLM_PROVIDER == "gemini"
                           else config.ANTHROPIC_API_KEY),
     }
+
+
+@app.get("/api/tags")
+def api_tags(category: str | None = None):
+    """지금 보고 있는 카테고리 안의 태그 목록 (많이 쓰인 순, 전부)."""
+    return {"tags": _tag_counts(category)}
 
 
 @app.get("/api/posts")

@@ -116,12 +116,27 @@ td.t-img img{width:44px;height:44px;object-fit:cover;border-radius:6px}
 .nowrap{white-space:nowrap;color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
 
 /* ── 보드 뷰 ─────────────────────────────── */
-.board{columns:5 200px;column-gap:12px}
-.board .bcard{break-inside:avoid;margin-bottom:12px;background:var(--panel);border:1px solid var(--line);
+/* 벽돌쌓기(masonry). CSS 다단(columns)은 한 열을 세로로 다 채우고 다음 열로 넘어가서
+   최신 글이 왼쪽 열을 따라 아래로 내려가 버린다. 그래서 그리드로 깔고,
+   카드 높이만큼 행을 차지하게 해 '왼쪽 위부터 가로로, 빈 곳에' 채워지도록 한다.
+   실제 span 값은 app.js 의 layoutBoard() 가 카드 높이를 재서 넣는다. */
+.board{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+  column-gap:12px;grid-auto-rows:1px;align-items:start}
+.board .bcard{background:var(--panel);border:1px solid var(--line);
   border-radius:12px;overflow:hidden;cursor:pointer;box-shadow:var(--shadow)}
 .board .bcard img{width:100%;display:block}
 .board .bcap{padding:9px 11px;font-size:12.5px}
 .board .bcap .m{color:var(--dim);font-size:11px;margin-top:3px}
+
+.tag.more{border-style:dashed;color:var(--dim)}
+.tagnote{color:var(--dim);font-size:12px}
+
+/* ── 관련 글 구분선 ───────────────────────── */
+.relhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+  margin:26px 0 14px;padding-top:14px;border-top:1px dashed var(--line)}
+.relhead b{font-size:14px}
+.relhead span{font-size:12px;color:var(--dim)}
+.relcount{font-size:13px;font-weight:400;color:var(--dim)}
 
 /* ── 모달 ────────────────────────────────── */
 .modal{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:24px}
@@ -146,5 +161,5 @@ select{padding:6px 9px;border-radius:8px;border:1px solid var(--line);background
 @media (max-width:900px){
   #app{grid-template-columns:1fr}
   .sidebar{position:static;height:auto}
-  .board{columns:2 150px}
+  .board{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
 }

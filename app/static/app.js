@@ -2,7 +2,9 @@
 const S = {
   cats: [], tags: [], posts: [], total: 0, unclassified: 0,
   cat: 'all', view: 'card', q: '', tag: null, sort: 'newest',
+  tagsOpen: false,          // 태그를 다 펼쳐 놓았는가
 };
+const TAG_HEAD = 40;        // 평소에 보여줄 태그 수
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => (s ?? '').replace(/[&<>"']/g, (c) =>
@@ -19,14 +21,14 @@ const api = async (url, opt) => (await fetch(url, opt)).json();
 /* ── 초기화 ─────────────────────────────── */
 async function boot() {
   const d = await api('/api/bootstrap');
-  S.cats = d.categories; S.tags = d.tags; S.total = d.total; S.unclassified = d.unclassified;
+  S.cats = d.categories; S.total = d.total; S.unclassified = d.unclassified;
   $('#stat').textContent = `저장 ${d.total}건 · 미분류 ${d.unclassified}건 · 자동수집 ${(d.sync_times || []).join(', ')}`;
   const warn = [];
   if (!d.logged_in) warn.push('⚠ 로그인 세션 없음 — 터미널에서 `make login`');
   if (!d.llm_ready) warn.push(`⚠ ${d.provider === 'gemini' ? 'GEMINI_API_KEY' : 'ANTHROPIC_API_KEY'} 미설정 — .env 확인`);
   if (warn.length) $('#joblog').textContent = warn.join('\n');
-  renderCats(); renderTags(); showJob(d.job);
-  await load();
+  renderCats(); showJob(d.job);
+  await Promise.all([loadTags(), load()]);
   if (!polling && d.job && ['queued', 'running'].includes(d.job.status)) poll();
 }
 
@@ -45,15 +47,40 @@ function renderCats() {
     S.cat = b.dataset.slug;
     const c = S.cats.find((x) => x.slug === S.cat);
     if (c && c.view) S.view = c.view;
-    renderCats(); load();
+    // 태그는 카테고리 안에서 다시 세므로, 옮겨온 태그 필터는 풀어준다
+    S.tag = null;
+    S.tagsOpen = false;
+    renderCats(); loadTags(); load();
   });
 }
 
+/* 태그는 '지금 보고 있는 카테고리' 기준으로 다시 받아온다 —
+   그래야 눌렀을 때 숫자대로 나오고, 그 안에 없는 태그가 보이지 않는다 */
+async function loadTags() {
+  const p = S.cat === 'all' ? '' : '?category=' + encodeURIComponent(S.cat);
+  try {
+    S.tags = (await api('/api/tags' + p)).tags || [];
+  } catch (e) {
+    S.tags = [];
+  }
+  renderTags();
+}
+
 function renderTags() {
-  $('#tags').innerHTML = S.tags.map((t) =>
+  const box = $('#tags');
+  if (!S.tags.length) {
+    box.innerHTML = '<span class="tagnote">분류 후 생성됩니다</span>';
+    return;
+  }
+  const hidden = S.tags.length - TAG_HEAD;
+  const shown = S.tagsOpen ? S.tags : S.tags.slice(0, TAG_HEAD);
+  box.innerHTML = shown.map((t) =>
     `<button class="tag ${S.tag === t.name ? 'active' : ''}" data-t="${esc(t.name)}">${esc(t.name)} ${t.count}</button>`).join('')
-    || '<span style="color:var(--dim);font-size:12px">분류 후 생성됩니다</span>';
-  $('#tags').querySelectorAll('.tag').forEach((b) => b.onclick = () => {
+    + (hidden > 0
+      ? `<button class="tag more" id="tag-more">${S.tagsOpen ? '접기' : `더 보기 ${hidden}개`}</button>`
+      : '');
+  box.querySelectorAll('.tag').forEach((b) => b.onclick = () => {
+    if (b.id === 'tag-more') { S.tagsOpen = !S.tagsOpen; return renderTags(); }
     S.tag = S.tag === b.dataset.t ? null : b.dataset.t;
     renderTags(); load();
   });
@@ -71,11 +98,16 @@ async function load() {
   renderHead(); renderView();
 }
 
+/* 이 카테고리가 주분류인 글 / 보조로만 걸린 '관련 글' 로 나눈다 */
+const splitPosts = () => [S.posts.filter((p) => !p.related), S.posts.filter((p) => p.related)];
+
 function renderHead() {
   const c = S.cats.find((x) => x.slug === S.cat);
   const name = S.cat === 'all' ? '전체' : (S.cat === 'unclassified' ? '미분류' : (c ? c.name : S.cat));
+  const [own, rel] = splitPosts();
   $('#cathead').innerHTML =
-    `<h1>${esc(name)} <span style="color:var(--dim);font-weight:400">${S.posts.length}</span></h1>
+    `<h1>${esc(name)} <span style="color:var(--dim);font-weight:400">${own.length}</span>
+       ${rel.length ? `<span class="relcount">+ 관련 ${rel.length}</span>` : ''}</h1>
      ${c && c.description ? `<p>${esc(c.description)}</p>` : ''}`;
   $('#viewtoggle').querySelectorAll('button').forEach((b) =>
     b.classList.toggle('active', b.dataset.view === S.view));
@@ -87,13 +119,54 @@ function renderView() {
       왼쪽 아래 <b>지금 동기화</b>를 눌러 저장된 글을 가져오세요.</div>`;
     return;
   }
-  if (S.view === 'table') return renderTable();
-  if (S.view === 'board') return renderBoard();
-  renderCards();
+  const draw = (list) => (S.view === 'table' ? renderTable(list)
+    : S.view === 'board' ? renderBoard(list) : renderCards(list));
+  const [own, rel] = splitPosts();
+  let html = own.length ? draw(own) : '';
+  if (rel.length) {
+    html += `<div class="relhead">
+        <b>관련 글 ${rel.length}건</b>
+        <span>주분류는 다르지만 이 주제와도 맞닿아 있는 글입니다</span>
+      </div>` + draw(rel);
+  }
+  $('#content').innerHTML = html;
+  bindOpen(S.view === 'table' ? 'tbody tr' : (S.view === 'board' ? '.bcard' : '.card'));
+  if (S.view === 'board') watchBoard();
 }
 
-function renderCards() {
-  $('#content').innerHTML = '<div class="cards">' + S.posts.map((p) => {
+/* ── 보드(벽돌쌓기) 배치 ────────────────────
+   그리드 행 높이를 1px로 두고, 카드가 제 높이만큼 행을 차지하게 한다.
+   그러면 브라우저가 왼쪽 위부터 가로로 채우면서 빈 곳을 메운다. */
+const BOARD_GAP = 12;
+
+function layoutBoard() {
+  document.querySelectorAll('.board .bcard').forEach((el) => {
+    const h = el.getBoundingClientRect().height;
+    if (h) el.style.gridRowEnd = 'span ' + Math.ceil(h + BOARD_GAP);
+  });
+}
+
+let boardPending = false;
+function relayoutBoard() {          // 이미지가 우르르 들어와도 한 번만 다시 그린다
+  if (boardPending) return;
+  boardPending = true;
+  requestAnimationFrame(() => { boardPending = false; layoutBoard(); });
+}
+
+function watchBoard() {
+  layoutBoard();
+  // 이미지는 나중에(스크롤해서) 로드되며 높이가 바뀐다 → 그때마다 다시 배치
+  document.querySelectorAll('.board img').forEach((img) => {
+    if (img.complete) return;
+    img.addEventListener('load', relayoutBoard, { once: true });
+    img.addEventListener('error', relayoutBoard, { once: true });
+  });
+}
+
+window.addEventListener('resize', () => { if (S.view === 'board') relayoutBoard(); });
+
+function renderCards(posts) {
+  return '<div class="cards">' + posts.map((p) => {
     const imgs = p.media.filter((m) => imgOf(m)).slice(0, 3);
     const thumbs = imgs.length
       ? `<div class="thumbs">${imgs.map((m) => `<img loading="lazy" src="${esc(imgOf(m))}" alt="">`).join('')}</div>` : '';
@@ -111,11 +184,10 @@ function renderCards() {
       </div>
     </article>`;
   }).join('') + '</div>';
-  bindOpen('.card');
 }
 
-function renderTable() {
-  const rows = S.posts.map((p) => {
+function renderTable(posts) {
+  const rows = posts.map((p) => {
     const img = p.media.find((m) => imgOf(m));
     return `<tr data-id="${p.id}">
       <td class="nowrap">${p.cat_name ? `<span class="badge" style="background:${p.cat_color}">${esc(p.cat_name)}</span>` : '-'}</td>
@@ -127,14 +199,13 @@ function renderTable() {
       <td class="nowrap">${(p.tags || []).slice(0, 3).map(esc).join(', ')}</td>
     </tr>`;
   }).join('');
-  $('#content').innerHTML = `<div class="tablewrap"><table><thead><tr>
+  return `<div class="tablewrap"><table><thead><tr>
       <th>분류</th><th>요약 / 본문</th><th>작성자</th><th>날짜</th><th>이미지</th><th>태그</th>
     </tr></thead><tbody>${rows}</tbody></table></div>`;
-  bindOpen('tbody tr');
 }
 
-function renderBoard() {
-  $('#content').innerHTML = '<div class="board">' + S.posts.map((p) => {
+function renderBoard(posts) {
+  return '<div class="board">' + posts.map((p) => {
     const img = p.media.find((m) => imgOf(m));
     return `<div class="bcard" data-id="${p.id}">
       ${img ? `<img loading="lazy" src="${esc(imgOf(img))}" alt="">` : ''}
@@ -142,7 +213,6 @@ function renderBoard() {
         <div class="m">@${esc(p.author || '')} · ${fmtDate(p.posted_at)}</div></div>
     </div>`;
   }).join('') + '</div>';
-  bindOpen('.bcard');
 }
 
 function bindOpen(sel) {
