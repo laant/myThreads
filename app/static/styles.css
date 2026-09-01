@@ -120,7 +120,10 @@ td.t-img img{width:44px;height:44px;object-fit:cover;border-radius:6px}
    최신 글이 왼쪽 열을 따라 아래로 내려가 버린다. 그래서 그리드로 깔고,
    카드 높이만큼 행을 차지하게 해 '왼쪽 위부터 가로로, 빈 곳에' 채워지도록 한다.
    실제 span 값은 app.js 의 layoutBoard() 가 카드 높이를 재서 넣는다. */
-.board{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+/* 열은 최대 5개까지만. 한 열의 최소 너비를 '전체의 1/5'로 잡아 그 이상 쪼개지지 않게 하고,
+   창이 좁아져 1/5이 220px보다 작아지면 그때부터 4·3·2열로 줄어든다. */
+.board{display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(max(220px,calc((100% - 48px) / 5)),1fr));
   column-gap:12px;grid-auto-rows:1px;align-items:start}
 .board .bcard{background:var(--panel);border:1px solid var(--line);
   border-radius:12px;overflow:hidden;cursor:pointer;box-shadow:var(--shadow)}
