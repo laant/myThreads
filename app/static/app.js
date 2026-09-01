@@ -25,7 +25,7 @@ async function boot() {
   $('#stat').textContent = `저장 ${d.total}건 · 미분류 ${d.unclassified}건 · 자동수집 ${(d.sync_times || []).join(', ')}`;
   const warn = [];
   if (!d.logged_in) warn.push('⚠ 로그인 세션 없음 — 터미널에서 `make login`');
-  if (!d.llm_ready) warn.push(`⚠ ${d.provider === 'gemini' ? 'GEMINI_API_KEY' : 'ANTHROPIC_API_KEY'} 미설정 — .env 확인`);
+  if (!d.llm_ready) warn.push(`⚠ ${d.llm_key_env} 미설정 (${d.provider}) — .env 확인`);
   if (warn.length) $('#joblog').textContent = warn.join('\n');
   renderCats(); showJob(d.job);
   await Promise.all([loadTags(), load()]);

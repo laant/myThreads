@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from starlette.requests import Request
 
 from . import config
+from .classifier import llm
 from .db import clear_stale_jobs, db, delete_post, init_db, now, restore_deleted
 
 BASE = Path(__file__).parent
@@ -202,8 +203,8 @@ def bootstrap():
         "logged_in": config.STATE_PATH.exists(),
         "version": ASSET_V,
         "provider": config.LLM_PROVIDER,
-        "llm_ready": bool(config.GEMINI_API_KEY if config.LLM_PROVIDER == "gemini"
-                          else config.ANTHROPIC_API_KEY),
+        "llm_ready": llm.has_key(),
+        "llm_key_env": llm.key_env_name(),
     }
 
 

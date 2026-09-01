@@ -28,15 +28,18 @@ MEDIA_DIR = DATA_DIR / "media"
 DB_PATH = DATA_DIR / "mythreads.db"
 STATE_PATH = DATA_DIR / "state.json"          # Playwright storage_state (로그인 세션)
 
-# 분류에 쓰는 LLM (gemini | anthropic)
+# 분류에 쓰는 LLM (gemini | openai | anthropic)
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
 GEMINI_THINKING = os.getenv("GEMINI_THINKING", "low").strip()   # low | high
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini").strip()
+
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5").strip()
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5").strip()
 
 SAVED_URL = os.getenv("SAVED_URL", "https://www.threads.com/saved").strip()
 BASE_URL = "https://www.threads.com"

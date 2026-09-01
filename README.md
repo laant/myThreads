@@ -35,8 +35,13 @@ make build                   # 이미지 빌드 (첫 빌드 3~5분)
 ```
 
 > **API 키는 '분류'에만 쓰입니다.** 글을 읽어와 저장하는 수집 단계는 내 브라우저 세션만
-> 사용하며 LLM을 전혀 호출하지 않습니다. 저장된 본문·이어쓴 댓글 텍스트를 Gemini에 보내
+> 사용하며 LLM을 전혀 호출하지 않습니다. 저장된 본문·이어쓴 댓글 텍스트를 보내
 > 카테고리·한 줄 요약·태그를 받아오는 데에만 사용합니다. 이미지는 전송하지 않습니다.
+
+> **분류 엔진은 골라 쓸 수 있습니다.** `.env` 의 `LLM_PROVIDER` 를
+> `gemini`(기본) · `openai` · `anthropic` 중 하나로 두고 해당 키만 채우면 됩니다.
+> 셋 다 같은 재시도 규칙을 씁니다 — 요청 과다·서버 오류는 기다렸다 다시 시도하고,
+> 그 모델이 못 받는 항목(예: 일부 모델의 `temperature`)은 스스로 빼고 다시 보냅니다.
 
 ### 1) 최초 1회 Threads 로그인
 
@@ -121,8 +126,8 @@ app/
     parser.py     Threads 내부 JSON에서 글·이미지·이어쓴 댓글 추출 (테스트 있음)
     scraper.py    브라우저 제어 + DOM 폴백
     login.py      최초 로그인 / 쿠키 임포트
-  classifier/   Gemini 분류 엔진 (LLM_PROVIDER=anthropic 로 교체 가능)
-    llm.py        모델 자동 해석 · JSON 응답 파싱 · 재시도
+  classifier/   분류 엔진 — Gemini(기본) · OpenAI · Anthropic
+    llm.py        provider 전환 · 모델 자동 해석 · JSON 응답 파싱 · 재시도
     taxonomy.py   카테고리 체계 자동 설계
     classify.py   글별 카테고리 배정 + 한 줄 요약 + 태그
   db.py         SQLite 스키마 · 저장/삭제 헬퍼 (지운 글 기억 포함)
@@ -171,6 +176,6 @@ DATA_DIR=./data python tests/seed_demo.py   # UI 확인용 데모 데이터
 | 수집 0건 | Threads UI 변경 가능성 — `make logs`에서 "저장됨 목록: JSON n개 / DOM 링크 m개" 확인 |
 | 본문에 `작성자명 23시간 …` 이 섞임 | HTML에 심긴 JSON을 못 읽어 DOM 텍스트로 때운 글입니다. `make repair` → `make repair-apply` → `make sync-full` |
 | 최신 글인데 목록 맨 뒤에 있음 | 작성시각을 못 얻어 `posted_at=0` 인 경우입니다. 위와 같은 방법으로 복구 |
-| 분류 실패 | `.env`의 `GEMINI_API_KEY` 확인. 모델명이 없으면 사용 가능한 최신 flash 모델로 자동 대체됩니다 |
+| 분류 실패 | `.env`의 API 키 확인(화면 왼쪽 아래에 어떤 키가 비었는지 표시됩니다). 모델명이 계정에 없으면 쓸 수 있는 최신 모델로 자동 대체됩니다 |
 | 분류가 너무 느림/비쌈 | `GEMINI_MODEL` 을 flash-lite 계열로. 반대로 품질을 올리려면 `GEMINI_THINKING=high` |
 | 이미지가 안 보임 | fbcdn 링크는 만료됩니다. `DOWNLOAD_MEDIA=1`(기본)이면 로컬 사본을 씁니다 |
